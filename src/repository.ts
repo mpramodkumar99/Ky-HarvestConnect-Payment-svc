@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Payment } from './types.js';
+import type { Payment, SavedPaymentMethod, CreateSavedPMInput, Payout, CreatePayoutInput, PayoutStatus } from './types.js';
 
 export interface PaymentRepository {
   create(data: Omit<Payment, 'id'>): Promise<Payment>;
@@ -7,6 +7,15 @@ export interface PaymentRepository {
   findByOrderId(orderId: string): Promise<Payment | null>;
   findByGatewayOrderId(gatewayOrderId: string): Promise<Payment | null>;
   update(id: string, patch: Partial<Payment>): Promise<Payment | null>;
+}
+
+export interface SavedPMRepository {
+  create(data: CreateSavedPMInput): Promise<SavedPaymentMethod>;
+  listByUser(userId: string): Promise<SavedPaymentMethod[]>;
+  findById(id: string): Promise<SavedPaymentMethod | null>;
+  clearDefaultForUser(userId: string): Promise<void>;
+  setDefault(id: string): Promise<SavedPaymentMethod | null>;
+  delete(id: string): Promise<boolean>;
 }
 
 export class InMemoryPaymentRepository implements PaymentRepository {
@@ -69,5 +78,79 @@ export class InMemoryPaymentRepository implements PaymentRepository {
       },
     ];
     for (const p of payments) this.store.set(p.id, p);
+  }
+}
+
+// ── InMemorySavedPMRepository ─────────────────────────────────────────────────
+
+export class InMemorySavedPMRepository implements SavedPMRepository {
+  private store = new Map<string, SavedPaymentMethod>();
+
+  async create(data: CreateSavedPMInput): Promise<SavedPaymentMethod> {
+    const now = new Date().toISOString();
+    const pm: SavedPaymentMethod = { ...data, id: randomUUID(), createdAt: now, updatedAt: now };
+    this.store.set(pm.id, pm);
+    return pm;
+  }
+
+  async listByUser(userId: string): Promise<SavedPaymentMethod[]> {
+    return [...this.store.values()].filter((p) => p.userId === userId);
+  }
+
+  async findById(id: string): Promise<SavedPaymentMethod | null> {
+    return this.store.get(id) ?? null;
+  }
+
+  async clearDefaultForUser(userId: string): Promise<void> {
+    for (const [id, pm] of this.store) {
+      if (pm.userId === userId && pm.isDefault) {
+        this.store.set(id, { ...pm, isDefault: false });
+      }
+    }
+  }
+
+  async setDefault(id: string): Promise<SavedPaymentMethod | null> {
+    const pm = this.store.get(id);
+    if (!pm) return null;
+    const updated = { ...pm, isDefault: true, updatedAt: new Date().toISOString() };
+    this.store.set(id, updated);
+    return updated;
+  }
+
+  async delete(id: string): Promise<boolean> {
+    return this.store.delete(id);
+  }
+}
+
+// ── PayoutRepository ──────────────────────────────────────────────────────────
+
+export interface PayoutRepository {
+  create(input: CreatePayoutInput): Promise<Payout>;
+  findBySeller(sellerId: string): Promise<Payout[]>;
+  updateStatus(id: string, status: PayoutStatus): Promise<Payout | null>;
+}
+
+export class InMemoryPayoutRepository implements PayoutRepository {
+  private store = new Map<string, Payout>();
+
+  async create(input: CreatePayoutInput): Promise<Payout> {
+    const now    = new Date().toISOString();
+    const payout: Payout = { ...input, id: randomUUID(), status: 'pending', createdAt: now, updatedAt: now };
+    this.store.set(payout.id, payout);
+    return payout;
+  }
+
+  async findBySeller(sellerId: string): Promise<Payout[]> {
+    return [...this.store.values()]
+      .filter(p => p.sellerId === sellerId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async updateStatus(id: string, status: PayoutStatus): Promise<Payout | null> {
+    const existing = this.store.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, status, updatedAt: new Date().toISOString() };
+    this.store.set(id, updated);
+    return updated;
   }
 }
